@@ -1,0 +1,10 @@
+import { useQuery } from "@tanstack/react-query";
+import { api, unwrap } from "../api/client";
+
+export type FAQ = { id: number; question: string; answer: string; displayOrder: number; isActive: boolean };
+export type PageContent = { pageKey: string; title: string; content: string; updatedAt: string; isPublished?: boolean };
+
+export function FAQPage() { const { data = [], isLoading } = useQuery({ queryKey: ["faqs"], queryFn: () => api.get("/faqs").then(unwrap<FAQ[]>) }); return <section className="prose-page faq-page"><p className="eyebrow">QUESTIONS, ANSWERED</p><h1>Frequently Asked Questions</h1><p className="page-intro">Clear guidance for shopping, gifting, bulk requests and caring for your DIVA Candles.</p>{isLoading ? <p>Preparing answers…</p> : <div className="faq-list">{data.map((item) => <details key={item.id}><summary>{item.question}</summary><p>{item.answer}</p></details>)}</div>}</section>; }
+
+function renderContent(content: string) { return content.split(/\n\s*\n/).map((block, index) => block.startsWith("## ") ? <h2 key={index}>{block.slice(3)}</h2> : <p key={index}>{block}</p>); }
+export function PolicyPage({ pageKey }: { pageKey: "TERMS" | "PRIVACY_POLICY" | "SHIPPING_POLICY" | "RETURN_REFUND_POLICY" }) { const { data, isLoading, isError } = useQuery({ queryKey: ["page-content", pageKey], queryFn: () => api.get(`/content/${pageKey}`).then(unwrap<PageContent>) }); if (isLoading) return <section className="page-state">Preparing policy…</section>; if (isError || !data) return <section className="page-state"><h1>Policy unavailable</h1><p>Please contact DIVA Candles for the latest information.</p></section>; return <section className="prose-page policy"><p className="eyebrow">BUSINESS POLICY</p><h1>{data.title}</h1><div className="review-note">Business-review content. Final terms depend on the confirmed order and approved business policy.</div><div className="policy-content">{renderContent(data.content)}</div><small>Last updated {new Date(data.updatedAt).toLocaleDateString("en-IN")}</small></section>; }
