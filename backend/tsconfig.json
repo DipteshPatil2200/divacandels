@@ -11,5 +11,5 @@
     "resolveJsonModule": true,
     "noUncheckedIndexedAccess": true
   },
-  "include": ["src", "prisma", "prisma.config.ts", "tests"]
+  "include": ["src", "scripts", "tests"]
 }

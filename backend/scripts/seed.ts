@@ -1,16 +1,9 @@
 import "dotenv/config";
 import bcrypt from "bcryptjs";
-import { PrismaMssql } from "@prisma/adapter-mssql";
-import { PrismaClient } from "../generated/prisma/client.js";
-
-const adapter = new PrismaMssql({
-  server: process.env.DB_SERVER ?? "localhost", port: Number(process.env.DB_PORT ?? 1433), database: process.env.DB_NAME ?? "DivaCandlesDB",
-  user: process.env.DB_USER ?? "sa", password: process.env.DB_PASSWORD ?? "CHANGE_ME",
-  options: { encrypt: process.env.DB_ENCRYPT !== "false", trustServerCertificate: process.env.DB_TRUST_SERVER_CERTIFICATE !== "false" }
-});
-const prisma = new PrismaClient({ adapter });
+import { db } from "../src/config/database.js";
 
 async function seed() {
+  await db.$connect();
   const categorySeeds: Array<[string, string, string]> = [
     ["Sculptural Candles", "sculptural-candles", "Artful silhouettes designed to be admired."],
     ["Festive Collection", "festive-collection", "Warm, celebratory candles for meaningful occasions."],
@@ -18,11 +11,29 @@ async function seed() {
     ["Home Fragrance", "home-fragrance", "Layered fragrances that shape the feeling of home."],
     ["Bulk Collection", "bulk-collection", "Premium handcrafted candles available for larger celebrations and events."]
   ];
-  const categories = await Promise.all(categorySeeds.map(([name, slug, description], displayOrder) => prisma.category.upsert({ where: { slug }, update: {}, create: { name, slug, description, displayOrder } })));
+  const categories = await Promise.all(categorySeeds.map(([name, slug, description], displayOrder) => db.category.upsert({ where: { slug }, update: {}, create: { name, slug, description, displayOrder } })));
 
-  await prisma.siteSettings.upsert({ where: { id: 1 }, update: {}, create: { id: 1, instagramUrl: "https://www.instagram.com/diva_candles_official?igsh=OXF1NTluNmZnd3g0", youtubeUrl: "https://youtube.com/@diva-07-25?si=Yi_d7oguOqCLMYpV", linkedinUrl: "https://www.linkedin.com/company/diva-candle/" } });
+  await db.siteSettings.upsert({ where: { id: 1 }, update: {}, create: { id: 1, instagramUrl: "https://www.instagram.com/diva_candles_official?igsh=OXF1NTluNmZnd3g0", youtubeUrl: "https://youtube.com/@diva-07-25?si=Yi_d7oguOqCLMYpV", linkedinUrl: "https://www.linkedin.com/company/diva-candle/" } });
   const password = process.env.ADMIN_INITIAL_PASSWORD ?? "CHANGE_THIS_STRONG_PASSWORD";
-  await prisma.adminUser.upsert({ where: { email: (process.env.ADMIN_EMAIL ?? "info.divacandles@gmail.com").toLowerCase() }, update: {}, create: { name: process.env.ADMIN_NAME ?? "DIVA Candles Administrator", email: (process.env.ADMIN_EMAIL ?? "info.divacandles@gmail.com").toLowerCase(), passwordHash: await bcrypt.hash(password, 12), role: "SUPER_ADMIN", mustChangePassword: true } });
+  await db.adminUser.upsert({ where: { email: (process.env.ADMIN_EMAIL ?? "info.divacandles@gmail.com").toLowerCase() }, update: { isActive: true }, create: { name: process.env.ADMIN_NAME ?? "DIVA Candles Administrator", email: (process.env.ADMIN_EMAIL ?? "info.divacandles@gmail.com").toLowerCase(), passwordHash: await bcrypt.hash(password, 12), role: "SUPER_ADMIN", isActive: true, mustChangePassword: true } });
+
+  const faqs = [
+    { question: "How long does delivery take?", answer: "Orders are usually dispatched within 2–4 working days.", displayOrder: 0, isActive: true },
+    { question: "Are the candles handmade?", answer: "Yes. Each DIVA candle is hand-poured and finished in small batches.", displayOrder: 1, isActive: true },
+    { question: "Do you accept bulk and customised orders?", answer: "Yes. Visit our bulk orders page to request a quotation.", displayOrder: 2, isActive: true }
+  ];
+  for (const faq of faqs) {
+    await db.fAQ.upsert({ where: { question: faq.question }, update: faq, create: faq });
+  }
+  const pages = [
+    ["TERMS", "Terms & Conditions", "Please contact DIVA Candles for assistance with any order or quotation.", true],
+    ["PRIVACY_POLICY", "Privacy Policy", "DIVA Candles uses your information only to process enquiries, orders and customer support requests.", true],
+    ["SHIPPING_POLICY", "Shipping Policy", "Shipping timelines and charges are confirmed before dispatch.", true],
+    ["RETURN_REFUND_POLICY", "Return & Refund Policy", "Please contact us promptly if your order arrives damaged or incorrect.", true]
+  ] as const;
+  for (const [pageKey, title, content, isPublished] of pages) {
+    await db.pageContent.upsert({ where: { pageKey }, update: { title, content, isPublished }, create: { pageKey, title, content, isPublished, updatedById: 1 } });
+  }
 
   const products: any[] = [
     { sku: "DIVA-SC-001", name: "Moonlit Muse", slug: "moonlit-muse", description: "A sculptural statement candle with soft curves and a serene vanilla-sandalwood character.", shortDescription: "Sculptural calm, warmed by vanilla and sandalwood.", fragrance: "Vanilla & Sandalwood", waxType: "Soy blend", price: 899, compareAtPrice: 1099, stockQuantity: 18, isFeatured: true, isBestSeller: true, categoryId: categories[0]!.id },
@@ -39,7 +50,7 @@ async function seed() {
   ];
   for (const product of products) {
     const discountPercentage = product.compareAtPrice ? Math.round(((product.compareAtPrice - product.price) / product.compareAtPrice) * 10000) / 100 : 0;
-    await prisma.product.upsert({ where: { sku: product.sku }, update: {}, create: { ...product, discountPercentage, stockStatus: "IN_STOCK", isActive: true } });
+    await db.product.upsert({ where: { sku: product.sku }, update: {}, create: { ...product, discountPercentage, stockStatus: "IN_STOCK", isActive: true } });
   }
 
   const team = [
@@ -50,10 +61,10 @@ async function seed() {
     { name: "Purva Bhonde", designation: "Technical Expert & Product Development Advisor", description: "Purva brings scientific expertise through her Pharmacy background, supporting fragrance composition, essential oils, perfume blending, wax proportions, clean burning and product consistency.", displayOrder: 4, isFounder: false }
   ];
   for (const member of team) {
-    const existing = await prisma.teamMember.findFirst({ where: { name: member.name } });
-    if (existing) await prisma.teamMember.update({ where: { id: existing.id }, data: member }); else await prisma.teamMember.create({ data: member });
+    const existing = await db.teamMember.findFirst({ where: { name: member.name } });
+    if (existing) await db.teamMember.update({ where: { id: existing.id }, data: member }); else await db.teamMember.create({ data: member });
   }
   console.info("DIVA Candles seed completed");
 }
 
-seed().finally(() => prisma.$disconnect());
+seed().finally(() => db.$disconnect());

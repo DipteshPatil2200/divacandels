@@ -10,9 +10,7 @@
     "dev": "concurrently -n API,WEB -c magenta,cyan \"npm run dev -w backend\" \"npm run dev -w frontend\"",
     "build": "npm run build -w backend && npm run build -w frontend",
     "test": "npm run test -w backend && npm run test -w frontend",
-    "prisma:generate": "npm run prisma:generate -w backend",
-    "prisma:migrate": "npm run prisma:migrate -w backend",
-    "prisma:seed": "npm run prisma:seed -w backend"
+    "seed": "npm run seed -w backend"
   },
   "devDependencies": {
     "browserslist": "^4.28.7",
@@ -22,5 +20,10 @@
   },
   "engines": {
     "node": ">=20"
+  },
+  "dependencies": {
+    "@jridgewell/sourcemap-codec": "^1.5.5",
+    "@rollup/rollup-win32-x64-msvc": "^4.62.4",
+    "diva-candles": "file:../divacandles.worktrees/ssms-to-mongodb-migration-divacandles"
   }
 }

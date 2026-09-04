@@ -1,8 +1,8 @@
 import type { Request } from "express";
-import { prisma } from "../config/database.js";
+import { db } from "../config/database.js";
 
 export async function audit(req: Request, action: string, entityType: string, entityId?: string, previousData?: unknown, newData?: unknown) {
-  await prisma.auditLog.create({ data: {
+  await db.auditLog.create({ data: {
     adminUserId: req.admin?.id,
     action,
     entityType,

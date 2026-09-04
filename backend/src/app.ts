@@ -7,7 +7,7 @@ import rateLimit from "express-rate-limit";
 import swaggerUi from "swagger-ui-express";
 import path from "node:path";
 import { env } from "./config/env.js";
-import { databaseHealth } from "./config/database.js";
+import { databaseHealth, recordApplicationLog } from "./config/database.js";
 import { adminRouter } from "./routes/admin.routes.js";
 import { authRouter } from "./routes/auth.routes.js";
 import { publicRouter } from "./routes/public.routes.js";
@@ -23,7 +23,9 @@ app.use(express.json({ limit: "1mb" }));
 app.use(express.urlencoded({ extended: false, limit: "1mb" }));
 app.use(cookieParser());
 app.use("/uploads", express.static(path.resolve("uploads"), { fallthrough: false, maxAge: env.NODE_ENV === "production" ? "7d" : 0, immutable: env.NODE_ENV === "production" }));
-app.use(morgan(env.NODE_ENV === "production" ? "combined" : "dev"));
+app.use(morgan(env.NODE_ENV === "production" ? "combined" : "dev", {
+  stream: { write: (message) => { void recordApplicationLog(message.trim(), "access").catch((error) => console.error("Application log write failed", error)); } }
+}));
 
 const limiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 200, standardHeaders: "draft-8", legacyHeaders: false });
 const loginLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 10, standardHeaders: "draft-8", legacyHeaders: false });

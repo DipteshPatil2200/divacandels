@@ -1,65 +1,33 @@
+import { databaseStorage, db } from "../config/database.js";
 import { env } from "../config/env.js";
-import { prisma } from "../config/database.js";
 
-const CLEANUP_THRESHOLD_PERCENTAGE = 80;
-const EXPRESS_LIMIT_BYTES = 10 * 1024 * 1024 * 1024;
-
-type StorageRow = {
-  edition: string | null;
-  databaseMaxBytes: bigint | number | null;
-  usedBytes: bigint | number | null;
-  allocatedBytes: bigint | number | null;
-  fileMaxBytes: bigint | number | null;
-};
-
-const asNumber = (value: bigint | number | null | undefined) => value == null ? 0 : Number(value);
-const round = (value: number, digits = 2) => Number(value.toFixed(digits));
+const WARNING_THRESHOLD_PERCENTAGE = 80;
+const CRITICAL_THRESHOLD_PERCENTAGE = 90;
 const daysAgo = (days: number) => new Date(Date.now() - days * 24 * 60 * 60 * 1000);
 
 async function readStorage() {
-  const [row] = await prisma.$queryRaw<StorageRow[]>`
-    SELECT
-      CAST(SERVERPROPERTY('Edition') AS NVARCHAR(128)) AS edition,
-      CAST(DATABASEPROPERTYEX(DB_NAME(), 'MaxSizeInBytes') AS BIGINT) AS databaseMaxBytes,
-      SUM(CAST(FILEPROPERTY(name, 'SpaceUsed') AS BIGINT)) * 8192 AS usedBytes,
-      SUM(CAST(size AS BIGINT)) * 8192 AS allocatedBytes,
-      SUM(CASE WHEN max_size = -1 THEN 0 ELSE CAST(max_size AS BIGINT) END) * 8192 AS fileMaxBytes
-    FROM sys.database_files
-    WHERE type_desc = 'ROWS'
-  `;
-
-  const usedBytes = asNumber(row?.usedBytes);
-  const allocatedBytes = asNumber(row?.allocatedBytes);
-  const databaseMaxBytes = asNumber(row?.databaseMaxBytes);
-  const fileMaxBytes = asNumber(row?.fileMaxBytes);
-  const configuredMaxBytes = env.DB_STORAGE_LIMIT_MB ? env.DB_STORAGE_LIMIT_MB * 1024 * 1024 : 0;
-  const isExpress = row?.edition?.toLowerCase().includes("express") ?? false;
-  const maxBytes = databaseMaxBytes || configuredMaxBytes || fileMaxBytes || (isExpress ? EXPRESS_LIMIT_BYTES : 0);
-  const usagePercentage = maxBytes > 0 ? round(Math.min(100, usedBytes / maxBytes * 100)) : null;
-
+  const stats = await databaseStorage();
+  const usedBytes = stats.storageSize;
+  const maxBytes = stats.maxBytes;
+  const usagePercentage = maxBytes ? Math.min(100, Number(((usedBytes / maxBytes) * 100).toFixed(2))) : null;
   return {
-    edition: row?.edition ?? "Microsoft SQL Server",
+    engine: "MongoDB",
     usedBytes,
-    allocatedBytes,
-    maxBytes: maxBytes || null,
-    usedMB: round(usedBytes / 1024 / 1024),
-    allocatedMB: round(allocatedBytes / 1024 / 1024),
-    maxMB: maxBytes ? round(maxBytes / 1024 / 1024) : null,
+    allocatedBytes: stats.storageSize,
+    maxBytes,
+    usedMB: Number((usedBytes / 1024 / 1024).toFixed(2)),
+    allocatedMB: Number((stats.storageSize / 1024 / 1024).toFixed(2)),
+    maxMB: maxBytes ? Number((maxBytes / 1024 / 1024).toFixed(2)) : null,
+    availableMB: maxBytes ? Number(Math.max(0, (maxBytes - usedBytes) / 1024 / 1024).toFixed(2)) : null,
     usagePercentage,
-    status: usagePercentage == null ? "UNKNOWN" : usagePercentage >= CLEANUP_THRESHOLD_PERCENTAGE ? "CRITICAL" : usagePercentage >= 65 ? "WARNING" : "HEALTHY"
+    status: usagePercentage == null ? "UNKNOWN" : usagePercentage >= CRITICAL_THRESHOLD_PERCENTAGE ? "CRITICAL" : usagePercentage >= WARNING_THRESHOLD_PERCENTAGE ? "WARNING" : usagePercentage >= 70 ? "MONITOR" : "HEALTHY",
+    collections: stats.collections
   };
 }
 
 async function readCleanupCandidates() {
-  const now = new Date();
-  const clickCutoff = daysAgo(365);
-  const auditCutoff = daysAgo(730);
-  const [expiredSessions, oldClickEvents, oldAuditLogs] = await prisma.$transaction([
-    prisma.refreshToken.count({ where: { OR: [{ expiresAt: { lt: now } }, { revokedAt: { not: null } }] } }),
-    prisma.clickEvent.count({ where: { createdAt: { lt: clickCutoff } } }),
-    prisma.auditLog.count({ where: { createdAt: { lt: auditCutoff } } })
-  ]);
-  return { expiredSessions, oldClickEvents, oldAuditLogs, total: expiredSessions + oldClickEvents + oldAuditLogs };
+  const applicationLogs = await db.applicationLog.count({ where: { createdAt: { lt: daysAgo(env.LOG_RETENTION_DAYS) } } });
+  return { applicationLogs, total: applicationLogs };
 }
 
 export async function getDatabaseMaintenanceStatus() {
@@ -67,29 +35,19 @@ export async function getDatabaseMaintenanceStatus() {
   return {
     storage,
     cleanup: {
-      thresholdPercentage: CLEANUP_THRESHOLD_PERCENTAGE,
-      canRun: storage.usagePercentage != null && storage.usagePercentage >= CLEANUP_THRESHOLD_PERCENTAGE,
+      thresholdPercentage: WARNING_THRESHOLD_PERCENTAGE,
+      canRun: true,
       candidates,
-      retentionPolicy: {
-        clickAnalyticsDays: 365,
-        auditLogDays: 730
-      },
-      protectedData: ["Product and candle photos", "Products and categories", "Orders and payments", "Customer inquiries"]
+      retentionPolicy: { applicationLogDays: env.LOG_RETENTION_DAYS },
+      allowedLogSources: ["application_logs"],
+      protectedData: ["Customer and admin users", "Products and inventory", "Orders and payments", "Inquiries and contact submissions", "Analytics", "Settings", "Audit logs"]
     }
   };
 }
 
 export async function runSafeDatabaseCleanup() {
-  const before = await getDatabaseMaintenanceStatus();
-  if (!before.cleanup.canRun) return { allowed: false as const, before };
-  const now = new Date();
-  const clickCutoff = daysAgo(before.cleanup.retentionPolicy.clickAnalyticsDays);
-  const auditCutoff = daysAgo(before.cleanup.retentionPolicy.auditLogDays);
-  const [sessions, clickEvents, auditLogs] = await prisma.$transaction([
-    prisma.refreshToken.deleteMany({ where: { OR: [{ expiresAt: { lt: now } }, { revokedAt: { not: null } }] } }),
-    prisma.clickEvent.deleteMany({ where: { createdAt: { lt: clickCutoff } } }),
-    prisma.auditLog.deleteMany({ where: { createdAt: { lt: auditCutoff } } })
-  ]);
+  const cutoff = daysAgo(env.LOG_RETENTION_DAYS);
+  const result = await db.applicationLog.deleteMany({ where: { createdAt: { lt: cutoff } } });
   const after = await getDatabaseMaintenanceStatus();
-  return { allowed: true as const, deleted: { expiredSessions: sessions.count, oldClickEvents: clickEvents.count, oldAuditLogs: auditLogs.count, total: sessions.count + clickEvents.count + auditLogs.count }, before, after };
+  return { allowed: true as const, deletedLogs: result.count, message: "Old application log records were successfully cleaned.", after };
 }

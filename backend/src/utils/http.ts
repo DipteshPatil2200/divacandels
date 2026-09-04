@@ -2,6 +2,7 @@ import type { NextFunction, Request, Response } from "express";
 import { randomUUID } from "node:crypto";
 import { ZodError } from "zod";
 import multer from "multer";
+import { MongoServerError } from "mongodb";
 
 export class AppError extends Error {
   constructor(public status: number, message: string, public code = "REQUEST_ERROR") {
@@ -30,15 +31,11 @@ export function errorHandler(error: unknown, req: Request, res: Response, _next:
   if (error instanceof ZodError) {
     return res.status(422).json({ success: false, error: { code: "VALIDATION_ERROR", message: "Please check the submitted information", details: error.flatten() }, requestId: req.requestId });
   }
-  const prismaError = error as { code?: string; meta?: { target?: unknown; field_name?: unknown } };
-  if (prismaError?.code === "P2002") {
-    const target = Array.isArray(prismaError.meta?.target) ? prismaError.meta.target.join(", ") : String(prismaError.meta?.target ?? "SKU or URL slug");
+  if (error instanceof MongoServerError && error.code === 11000) {
+    const target = Object.keys(error.keyPattern ?? {}).join(", ") || "unique value";
     return res.status(409).json({ success: false, error: { code: "DUPLICATE_VALUE", message: `A record with this ${target} already exists. Please use a unique value.` }, requestId: req.requestId });
   }
-  if (prismaError?.code === "P2003") {
-    return res.status(422).json({ success: false, error: { code: "INVALID_RELATION", message: "The selected collection or related record is not valid." }, requestId: req.requestId });
-  }
-  if (prismaError?.code === "P2025") {
+  if (error instanceof Error && /not found$/i.test(error.message)) {
     return res.status(404).json({ success: false, error: { code: "NOT_FOUND", message: "The requested record no longer exists." }, requestId: req.requestId });
   }
   const appError = error instanceof AppError ? error : new AppError(500, "Something went wrong", "INTERNAL_ERROR");

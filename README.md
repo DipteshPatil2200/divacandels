@@ -1,25 +1,23 @@
 # DIVA Candles
 
-A production-oriented full-stack catalogue and inquiry platform for DIVA Candles. The React/Vite storefront and admin application communicate only with the Node/Express API. The API uses Prisma with Microsoft SQL Server locally and Azure SQL Database in production. Product media is designed for Cloudinary; no database credential is ever sent to the browser.
+A production-oriented full-stack catalogue and inquiry platform for DIVA Candles. The React/Vite storefront and admin application communicate only with the Node/Express API. The API uses MongoDB in local development and production. Product media is designed for Cloudinary; no database credential is ever sent to the browser.
 
 ## Architecture
 
 - `frontend/` — React, TypeScript, Vite, Tailwind CSS, React Router, TanStack Query
-- `backend/` — Express, TypeScript, Prisma, `@prisma/adapter-mssql`, JWT cookies
-- Local data — SQL Server Express, SQL Server Developer, or the optional SQL Server Developer container
-- Production — Vercel frontend, Azure App Service or Render backend, Azure SQL Database, Cloudinary images
-- Administration — SQL Server Management Studio (SSMS)
+- `backend/` — Express, TypeScript, MongoDB, JWT cookies
+- Local data — MongoDB Community Edition or the optional MongoDB container
+- Production — Vercel frontend, Azure App Service or Render backend, MongoDB Atlas, Cloudinary images
 
-PostgreSQL and Supabase are not used.
+MongoDB is the only database engine used by the application.
 
 ## Local setup on Windows
 
-Install Node.js 20+, SQL Server Express/Developer and SSMS. In SQL Server Configuration Manager, enable TCP/IP, set or confirm port 1433, enable SQL authentication if using `sa`, and restart the SQL Server service. In SSMS, create an empty database called `DivaCandlesDB`.
+Install Node.js 20+ and MongoDB, or use Docker Desktop for the included MongoDB service.
 
-Alternatively, Docker Desktop can run SQL Server Developer:
+Docker Desktop can run MongoDB:
 
 ```powershell
-$env:MSSQL_SA_PASSWORD = "Choose-A-Strong-Password!"
 docker compose up -d
 ```
 
@@ -29,13 +27,13 @@ Copy the examples and set local values:
 Copy-Item backend/.env.example backend/.env
 Copy-Item frontend/.env.example frontend/.env
 npm install
-npm run prisma:generate
-npm run prisma:deploy -w backend
-npm run prisma:seed
+npm run seed -w backend
 npm run dev
 ```
 
-If a database password contains `:`, `\`, `=`, `;`, `/`, `[`, `]`, `{` or `}`, wrap the value in braces in `DATABASE_URL`. Keep `DB_PASSWORD` as the literal password for the Microsoft adapter. The backend defaults are development conveniences only; production refuses incomplete secrets or trusted server certificates.
+Set `MONGODB_URI` to the connection string for your local or hosted MongoDB instance. The backend defaults are development conveniences only; production requires an explicit authenticated connection string and strong secrets.
+
+For storage monitoring, set `MONGODB_STORAGE_LIMIT_MB` to the MongoDB deployment quota (for example, the Atlas tier limit). `LOG_RETENTION_DAYS` defaults to 30. Morgan request logs are stored only in the explicitly allowlisted `application_logs` collection; admin cleanup removes only records older than the configured retention period. Audit logs and all business collections are protected.
 
 Open:
 
@@ -54,12 +52,10 @@ The seeded administrator uses `ADMIN_EMAIL` and `ADMIN_INITIAL_PASSWORD` and mus
 npm run dev
 npm run build
 npm run test
-npm run prisma:generate
-npm run prisma:migrate -- --name describe_the_change
-npm run prisma:seed
+npm run seed -w backend
 ```
 
-Prisma migration files must be committed. Deploy production migrations using `npm run prisma:deploy -w backend`; never use `migrate dev` against Azure SQL.
+MongoDB indexes are created by the backend during startup. Back up and restore the MongoDB database using `mongodump` and `mongorestore`.
 
 ## Team and bulk-order management
 
@@ -69,9 +65,9 @@ Prisma migration files must be committed. Deploy production migrations using `np
 - Admin bulk-product and pricing management: `http://localhost:5174/admin/bulk-orders`
 - Admin expense management and PDF reports: `http://localhost:5174/admin/expenses`
 
-Team members, bulk settings, quantity pricing tiers and quotation inquiries are stored in SQL Server. Product and profile images remain in Cloudinary in production, with only their URLs and public IDs stored in SQL Server. Local development images are written under `backend/uploads/`.
+Team members, bulk settings, quantity pricing tiers and quotation inquiries are stored in MongoDB. Product and profile images remain in Cloudinary in production, with only their URLs and public IDs stored in MongoDB. Local development images are written under `backend/uploads/`.
 
-Customer-facing pages show availability without exposing exact stock quantities. When a customer continues to WhatsApp from a product card, product page, or WhatsApp cart, the selected quantity is deducted atomically in SQL Server. A unique client token makes retries idempotent so the same action cannot deduct stock twice. Expense records are admin-only and support filtering, editing, deletion, totals by category, and downloadable PDF reports.
+Customer-facing pages show availability without exposing exact stock quantities. When a customer continues to WhatsApp from a product card, product page, or WhatsApp cart, the selected quantity is deducted atomically in MongoDB. A unique client token makes retries idempotent so the same action cannot deduct stock twice. Expense records are admin-only and support filtering, editing, deletion, totals by category, and downloadable PDF reports.
 
 ## Cloudinary and Gmail SMTP
 
@@ -98,20 +94,20 @@ EMAIL_FROM_ADDRESS=info.divacandles@gmail.com
 NOTIFICATION_EMAIL=info.divacandles@gmail.com
 ```
 
-Never place Cloudinary secrets, SMTP credentials, SQL credentials or `DATABASE_URL` in `frontend/.env` or Vercel frontend variables.
+Never place Cloudinary secrets, SMTP credentials, MongoDB credentials or `MONGODB_URI` in `frontend/.env` or Vercel frontend variables.
 
 ## Production deployment
 
-Deploy `frontend/` to Vercel with `VITE_API_BASE_URL=https://YOUR_API/api/v1`; `frontend/vercel.json` already contains the SPA rewrite. Deploy `backend/` to Azure App Service or Render, configure all backend secrets there, set `NODE_ENV=production`, `COOKIE_SECURE=true`, `DB_ENCRYPT=true`, `DB_TRUST_SERVER_CERTIFICATE=false`, allow the Vercel origin in `CORS_ALLOWED_ORIGINS`, and run `npm run prisma:deploy -w backend`. The deployed backend—not Vercel and never a developer PC—connects to Azure SQL.
+Deploy `frontend/` to Vercel with `VITE_API_BASE_URL=https://YOUR_API/api/v1`; `frontend/vercel.json` already contains the SPA rewrite. Deploy `backend/` to Render or another Node host, configure all backend secrets there, set `NODE_ENV=production`, `COOKIE_SECURE=true`, provide a private `MONGODB_URI` (MongoDB Atlas is recommended), and allow the Vercel origin in `CORS_ALLOWED_ORIGINS`.
 
-Detailed firewall, encryption and SSMS guidance is in [docs/AZURE_SQL.md](docs/AZURE_SQL.md). Backup and restore procedures are in [docs/SQLSERVER_BACKUP_RESTORE.md](docs/SQLSERVER_BACKUP_RESTORE.md).
+Use MongoDB Atlas network access controls and database users for production. Back up and restore with `mongodump` and `mongorestore`.
 
 ## Database safeguards
 
-The Microsoft driver pool is configurable with `DB_POOL_MAX`, `DB_POOL_MIN`, and `DB_POOL_IDLE_TIMEOUT_MS`. Startup performs exponential connection retries, and `/health/database` performs a real SQL query. `previousData` and `newData` in `AuditLog` are `NVARCHAR(MAX)` strings containing serialized JSON because Prisma JSON fields are unsupported by SQL Server.
+The MongoDB connection pool is configurable through the connection string. Startup performs exponential connection retries, and `/health/database` performs a real MongoDB ping. Audit snapshots are stored as native BSON documents.
 
-The admin dashboard reports actual SQL data-file usage. SQL Server Express automatically uses its 10 GB database limit and Azure SQL reads the configured database maximum. For SQL Server Developer Edition, set `DB_STORAGE_LIMIT_MB` to the capacity you want the dashboard to monitor. Safe cleanup is enforced by the backend and remains locked until usage reaches 80%; it removes only expired/revoked sessions, click analytics older than 365 days, and audit logs older than 730 days. Products, product photos, orders, payments and inquiries are never deleted by this operation.
+The admin dashboard reports MongoDB storage when the deployment exposes storage metrics; otherwise it reports collection-level usage. Safe cleanup is enforced by the backend and remains locked until usage reaches 80%; it removes only expired/revoked sessions, click analytics older than 365 days, and audit logs older than 730 days. Products, product photos, orders, payments and inquiries are never deleted by this operation.
 
 ## Business launch checklist
 
-Replace generated product placeholders with licensed Cloudinary assets, configure SMTP, enter the approved Amazon URLs, review all legal-policy placeholders, add the final address/business hours, rotate the initial admin password, configure Azure SQL firewall and retention, run the end-to-end workflow, and verify the restore procedure before launch.
+Replace generated product placeholders with licensed Cloudinary assets, configure SMTP, enter the approved Amazon URLs, review all legal-policy placeholders, add the final address/business hours, rotate the initial admin password, configure MongoDB Atlas access and backups, run the end-to-end workflow, and verify the restore procedure before launch.
