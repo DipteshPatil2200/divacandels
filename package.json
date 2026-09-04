@@ -20,10 +20,5 @@
   },
   "engines": {
     "node": ">=20"
-  },
-  "dependencies": {
-    "@jridgewell/sourcemap-codec": "^1.5.5",
-    "@rollup/rollup-win32-x64-msvc": "^4.62.4",
-    "diva-candles": "file:../divacandles.worktrees/ssms-to-mongodb-migration-divacandles"
   }
 }
